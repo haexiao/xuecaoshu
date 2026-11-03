@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.xuecaoshu.app.AppState
+import com.xuecaoshu.app.BuildConfig
 import com.xuecaoshu.app.Feedback
 import com.xuecaoshu.app.data.CursiveFace
 import com.xuecaoshu.app.data.LearnOrder
@@ -314,7 +315,7 @@ ef 由字频决定起点（常用字 2.70，罕用字 2.00），答对 +0.10，�
 """.trimIndent()
 
 private val ABOUT_TEXT = """
-学草书 v1.0　·　单机应用，无账号，无广告。
+学草书 v${BuildConfig.VERSION_NAME}　·　单机应用，无账号，无广告。
 
 · 数据来源
 字库：GB2312 编码空间（6763 字）。
