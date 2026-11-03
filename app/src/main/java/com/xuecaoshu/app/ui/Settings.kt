@@ -99,9 +99,13 @@ fun SettingsScreen(onBack: () -> Unit) {
             Group {
                 DropdownRow(
                     "字库",
-                    if (s.level == 1) "GB2312 一级" else "GB2312 二级",
-                    listOf("GB2312 一级", "GB2312 二级")
-                ) { i -> AppState.updateSettings { it.copy(level = i + 1) } }
+                    AppState.levelName,
+                    listOf("GB2312 一级", "GB2312 二级", "GB2312 一级 + 二级")
+                ) { i ->
+                    AppState.updateSettings {
+                        it.copy(level = when (i) { 0 -> 1; 1 -> 2; else -> 0 })
+                    }
+                }
                 Divider()
                 DropdownRow(
                     "学习节奏", "${s.dailyNew} 字 / 天",
@@ -138,6 +142,10 @@ fun SettingsScreen(onBack: () -> Unit) {
             Group {
                 SwitchRow("深色模式", s.darkTheme) { v ->
                     AppState.updateSettings { it.copy(darkTheme = v) }
+                }
+                Divider()
+                RangeRow("一言字号", s.quoteSize, 28, 80, "sp") { v ->
+                    AppState.updateSettings { it.copy(quoteSize = v) }
                 }
                 Divider()
                 DropdownRow(
@@ -455,6 +463,71 @@ private fun LevelSlider(
                     .size(18.dp)
                     .clip(CircleShape)
                     .background(if (level == 0) p.muted else p.accent)
+            )
+        }
+    }
+}
+
+/** 带上下限的滑条，拖到哪一格就是多少。 */
+@Composable
+private fun RangeRow(
+    title: String,
+    value: Int,
+    min: Int,
+    max: Int,
+    suffix: String,
+    onChange: (Int) -> Unit
+) {
+    val p = Ink.palette
+    Box(
+        Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 18.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(title, color = p.ink, fontSize = 14.sp)
+            Spacer(Modifier.width(10.dp))
+            Box(
+                Modifier.weight(1f).height(30.dp)
+                    .pointerInput(min, max) {
+                        fun pick(x: Float): Int {
+                            val f = (x / size.width).coerceIn(0f, 1f)
+                            return (min + f * (max - min)).roundToInt().coerceIn(min, max)
+                        }
+                        detectTapGestures { off ->
+                            onChange(pick(off.x))
+                            Feedback.tap()
+                        }
+                    }
+                    .pointerInput(min, max) {
+                        fun pick(x: Float): Int {
+                            val f = (x / size.width).coerceIn(0f, 1f)
+                            return (min + f * (max - min)).roundToInt().coerceIn(min, max)
+                        }
+                        detectHorizontalDragGestures { ch, _ -> onChange(pick(ch.position.x)) }
+                    }
+            ) {
+                BoxWithConstraints(Modifier.fillMaxSize()) {
+                    val w = maxWidth
+                    val frac = (value - min).toFloat() / (max - min)
+                    Box(
+                        Modifier.align(Alignment.CenterStart).fillMaxWidth().height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)).background(p.line)
+                    )
+                    Box(
+                        Modifier.align(Alignment.CenterStart).fillMaxWidth(frac).height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)).background(p.accent)
+                    )
+                    Box(
+                        Modifier.align(Alignment.CenterStart)
+                            .offset(x = (w * frac - 9.dp).coerceAtLeast((-9).dp))
+                            .size(18.dp).clip(CircleShape).background(p.accent)
+                    )
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "$value$suffix", color = p.ink2, fontSize = 12.sp,
+                textAlign = TextAlign.End, modifier = Modifier.width(44.dp)
             )
         }
     }

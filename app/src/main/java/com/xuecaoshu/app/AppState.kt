@@ -13,6 +13,8 @@ import com.xuecaoshu.app.data.Settings
 import com.xuecaoshu.app.data.TradVariant
 import com.xuecaoshu.app.data.Store
 import com.xuecaoshu.app.data.StudyMode
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.random.Random
 
 private const val DAY_MS = 24L * 60L * 60L * 1000L
@@ -35,7 +37,10 @@ data class Card(
 
 /** Running state of one study session. */
 class StudySession(val mode: StudyMode, queue: List<CharEntry>) {
+    /** 本轮还没毕业的字（学习模式用来算进度）。 */
     val pool = ArrayList(queue)
+    /** 出题队列：字答完后按「间隔」重新插回这里，实现穿插。 */
+    val upcoming = ArrayDeque<String>().apply { queue.forEach { add(it.char) } }
     /** 最近出过的字，用来保证同一个字至少隔两张卡。 */
     val recent = ArrayDeque<String>()
     var total by mutableStateOf(queue.size)
@@ -100,7 +105,18 @@ object AppState {
     }
 
     // --------------------------------------------------------------- queries
-    fun charsOfLevel(level: Int): List<CharEntry> = byLevel[level] ?: emptyList()
+    /** level: 1 = 一级，2 = 二级，0 = 一级 + 二级。 */
+    fun charsOfLevel(level: Int): List<CharEntry> = when (level) {
+        0 -> (byLevel[1] ?: emptyList()) + (byLevel[2] ?: emptyList())
+        else -> byLevel[level] ?: emptyList()
+    }
+
+    val levelName: String
+        get() = when (settings.level) {
+            0 -> "GB2312 一级 + 二级"
+            2 -> "GB2312 二级"
+            else -> "GB2312 一级"
+        }
 
     fun progressOf(ch: String): CharProgress = progress[ch] ?: EMPTY
 
@@ -240,14 +256,76 @@ object AppState {
     }
 
     fun startSession(mode: StudyMode) {
-        val queue = buildQueue(mode)
-        session = StudySession(mode, queue)
         tickAt = SystemClock.elapsedRealtime()
-        if (queue.isNotEmpty()) nextCard()
+        // 学习模式：今天没学完的那一轮接着学
+        if (mode == StudyMode.LEARN) {
+            val restored = restoreSession()
+            if (restored != null) {
+                session = restored
+                nextCard()
+                return
+            }
+        }
+        session = StudySession(mode, buildQueue(mode))
+        nextCard()
+        saveSessionState()
     }
 
     fun endSession() {
+        saveSessionState()
         session = null
+    }
+
+    // ------------------------------------------------------------ 会话存档
+    private fun entryOf(ch: String): CharEntry? =
+        charsOfLevel(settings.level).firstOrNull { it.char == ch }
+
+    /** 只存「今天这一轮学习还没学完的部分」。 */
+    private fun saveSessionState() {
+        val s = session
+        if (s == null || s.mode != StudyMode.LEARN) {
+            store.clearSession()
+            return
+        }
+        val alive = s.pool.filter { !progressOf(it.char).learned }
+        if (alive.isEmpty()) {
+            store.clearSession()
+            return
+        }
+        val o = JSONObject()
+        o.put("day", store.today())
+        o.put("total", s.total)
+        o.put("done", s.done)
+        val arr = JSONArray()
+        alive.forEach { arr.put(it.char) }
+        o.put("pool", arr)
+        store.saveSession(o.toString())
+    }
+
+    private fun restoreSession(): StudySession? {
+        val raw = store.loadSession() ?: return null
+        val o = runCatching { JSONObject(raw) }.getOrNull() ?: return null
+        if (o.optString("day") != store.today()) {
+            store.clearSession()
+            return null
+        }
+        val arr = o.optJSONArray("pool") ?: return null
+        val ents = ArrayList<CharEntry>(arr.length())
+        for (i in 0 until arr.length()) {
+            val ch = arr.optString(i)
+            if (ch.isEmpty()) continue
+            entryOf(ch)?.let { ents.add(it) }
+        }
+        if (ents.isEmpty()) {
+            store.clearSession()
+            return null
+        }
+        val s = StudySession(StudyMode.LEARN, ents)
+        s.upcoming.clear()
+        ents.shuffled().forEach { s.upcoming.add(it.char) }
+        s.total = o.optInt("total", ents.size).coerceAtLeast(ents.size)
+        s.done = o.optInt("done", 0).coerceIn(0, s.total)
+        return s
     }
 
     fun nextCard() {
@@ -258,12 +336,20 @@ object AppState {
         if (s.mode == StudyMode.LEARN) {
             // 连击达标的字移出本轮
             s.pool.removeAll { progressOf(it.char).learned }
+            s.upcoming.removeAll { progressOf(it).learned }
             s.done = s.total - s.pool.size
             if (s.pool.isEmpty()) {
+                // 这一轮学完了，清掉存档
+                store.clearSession()
                 s.current = null
                 return
             }
-            s.current = makeCard(pickInterleaved(s))
+            if (s.upcoming.isEmpty()) {
+                // 兜底：队列空了就把剩下没毕业的重新打乱排一遍
+                s.upcoming.addAll(s.pool.map { it.char }.shuffled())
+            }
+            val ch = s.upcoming.removeFirst()
+            s.current = makeCard(entryOf(ch) ?: s.pool.first())
         } else {
             if (s.pool.isEmpty()) {
                 s.current = null
@@ -275,19 +361,22 @@ object AppState {
     }
 
     /**
-     * 穿插挑卡：优先挑离达标最远的字，并保证同一个字至少隔两张。
+     * 出题间隔：答错很快回来，连对越多隔得越远。
+     * 20 个字的池子里，这样会形成 A B C D … A B C D 的穿插，而不是
+     * 先把几个字刷毕业再换下一批。
      */
-    private fun pickInterleaved(s: StudySession): CharEntry {
-        val blocked = s.recent.toSet()
-        val free = s.pool.filter { it.char !in blocked }
-        val candidates = free.ifEmpty { s.pool }
-        // 先找连击最少的，再在这一批里随机挑 —— 这样一组内部是穿插的，不按字频排队
-        val lowest = candidates.minOfOrNull { streakOf(it.char) } ?: 0
-        val best = candidates.filter { streakOf(it.char) == lowest }
-        val chosen = best.random()
-        s.recent.addFirst(chosen.char)
-        while (s.recent.size > 2) s.recent.removeLast()
-        return chosen
+    private fun reschedule(s: StudySession, ch: String, wrong: Boolean) {
+        if (s.mode != StudyMode.LEARN) return
+        val p = progressOf(ch)
+        if (p.learned) return                       // 已经毕业，不再排
+        val (lo, hi) = when {
+            wrong -> 1 to 3
+            p.f1 <= 1 -> 3 to 6
+            else -> 6 to 10
+        }
+        val gap = Random.nextInt(lo, hi + 1)
+        val pos = gap.coerceAtMost(s.upcoming.size)
+        s.upcoming.add(pos, ch)
     }
 
     private fun makeCard(entry: CharEntry): Card {
@@ -371,8 +460,10 @@ object AppState {
         }
 
         progress[card.entry.char] = np
+        reschedule(s, card.entry.char, wrong = !isRight)
         bumpStats(if (s.mode == StudyMode.LEARN) "l" else "r")
         persist()
+        saveSessionState()
     }
 
     /** 答题后点其它选项：只切换正在查看的对照，不改判分 */
@@ -398,6 +489,7 @@ object AppState {
             np.copy(dueAt = now)
         }
         progress[card.entry.char] = np
+        reschedule(s, card.entry.char, wrong = true)
         bumpStats(if (s.mode == StudyMode.LEARN) "l" else "r")
         persist()
     }

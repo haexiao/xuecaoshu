@@ -69,6 +69,7 @@ data class Settings(
     val dailyNew: Int = 15,
     val dailyReview: Int = 15,
     val order: LearnOrder = LearnOrder.FREQ,
+    val quoteSize: Int = 48,       // 一言字号 sp，28..80
     val soundLevel: Int = 60,      // 0..100，0 = 关闭
     val vibrateLevel: Int = 50
 )

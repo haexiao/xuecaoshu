@@ -3,6 +3,7 @@ package com.xuecaoshu.app.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -101,36 +102,46 @@ fun HomeScreen(
 
         Spacer(Modifier.height(6.dp))
 
-        // 竖排：一列到底，靠右
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            horizontalArrangement = Arrangement.End
+        // 竖排：字号固定，一列排满就换到左边一列（自右向左）
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().weight(1f),
+            contentAlignment = Alignment.TopEnd
         ) {
+            val qSize = AppState.settings.quoteSize.toFloat()   // 字号固定，字数多了换列
+            val lineH = qSize * 1.16f             // 每个字占的高度
+            val perCol = ((maxHeight.value - 8f) / lineH).toInt().coerceAtLeast(1)
+
+            // 按标点断句：每一句自己占一列；某句一列放不下，才折到下一列
+            val cols = ArrayList<String>()
+            splitQuote(quote.text).forEach { seg ->
+                var i = 0
+                while (i < seg.length) {
+                    val take = minOf(perCol, seg.length - i)
+                    cols.add(seg.substring(i, i + take))
+                    i += take
+                }
+            }
+
             Column(
                 Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .clickable { quoteCursive = !quoteCursive }
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 竖排：按标点断成多列，自右向左
-                val lines = splitQuote(quote.text)
-                val qSize = quoteSizeFor(lines.maxOfOrNull { it.length } ?: 1)
                 Row(verticalAlignment = Alignment.Top) {
-                    // Row 从左到右排，所以倒过来放，第一句才在最右边
-                    lines.reversed().forEach { line ->
-                        Spacer(Modifier.width(if (lines.size > 1) 6.dp else 0.dp))
+                    // Row 从左到右排，所以倒过来放，第一列才在最右边
+                    cols.asReversed().forEach { line ->
+                        Spacer(Modifier.width(if (cols.size > 1) 6.dp else 0.dp))
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             line.forEach { ch ->
                                 Text(
                                     text = ch.toString(),
-                                    fontSize = qSize,
+                                    fontSize = qSize.sp,
                                     color = p.ink,
                                     fontFamily = if (quoteCursive) faceFamily
                                     else FontFamily.Default,
-                                    lineHeight = qSize * 1.2f,
+                                    lineHeight = lineH.sp,
                                     textAlign = TextAlign.Center
                                 )
                             }
@@ -218,14 +229,6 @@ private fun splitQuote(text: String): List<String> {
 }
 
 /** 按字数挑一个能塞进竖排区域的字号。 */
-private fun quoteSizeFor(n: Int) = when {
-    n <= 6 -> 48.sp
-    n <= 8 -> 42.sp
-    n <= 11 -> 34.sp
-    n <= 14 -> 27.sp
-    else -> 22.sp
-}
-
 @Composable
 private fun EntryButton(
     modifier: Modifier,

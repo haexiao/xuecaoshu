@@ -207,6 +207,21 @@ class Store(private val ctx: Context) {
         true
     }.getOrDefault(false)
 
+    // -------------------------------------------------------------- session
+    private val sessionPrefs by lazy {
+        ctx.getSharedPreferences("session", Context.MODE_PRIVATE)
+    }
+
+    fun saveSession(json: String) {
+        sessionPrefs.edit().putString("state", json).apply()
+    }
+
+    fun loadSession(): String? = sessionPrefs.getString("state", null)
+
+    fun clearSession() {
+        sessionPrefs.edit().remove("state").apply()
+    }
+
     // ------------------------------------------------------------- settings
     private val prefs by lazy { ctx.getSharedPreferences("settings", Context.MODE_PRIVATE) }
 
@@ -230,6 +245,7 @@ class Store(private val ctx: Context) {
             2 -> LearnOrder.RANDOM
             else -> LearnOrder.FREQ
         },
+        quoteSize = prefs.getInt("quoteSize", 48).coerceIn(28, 80),
         soundLevel = prefs.getInt(
             "soundLevel",
             if (prefs.getBoolean("sound", true)) 60 else 0
@@ -261,6 +277,7 @@ class Store(private val ctx: Context) {
                 LearnOrder.BOOK -> 1
                 LearnOrder.RANDOM -> 2
             })
+            .putInt("quoteSize", s.quoteSize)
             .putInt("soundLevel", s.soundLevel)
             .putInt("vibrateLevel", s.vibrateLevel)
             .apply()

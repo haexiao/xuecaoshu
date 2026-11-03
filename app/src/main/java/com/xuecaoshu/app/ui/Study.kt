@@ -101,7 +101,7 @@ private fun StudyBody(card: Card, onExit: () -> Unit) {
                     .padding(horizontal = 8.dp)
             )
             Text(
-                "${(s.done + 1).coerceAtMost(s.total)} / ${s.total}",
+                "${s.done.coerceIn(0, s.total)} / ${s.total}",
                 color = p.muted, fontSize = 13.sp
             )
             Spacer(Modifier.weight(1f))

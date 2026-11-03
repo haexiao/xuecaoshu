@@ -109,7 +109,8 @@ private fun BookHome(onBack: () -> Unit, onOpenList: (String) -> Unit) {
             Text("$learned / $total", color = p.muted, fontSize = 11.sp)
         }
 
-        Spacer(Modifier.height(2.dp))
+        Text(AppState.levelName, color = p.muted, fontSize = 10.sp)
+        Spacer(Modifier.height(6.dp))
         Box(
             Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
                 .background(p.line)
