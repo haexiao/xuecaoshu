@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         Feedback.init(applicationContext)
+        CrashLog.install(applicationContext)
         if (!AppState.ready) {
             AppState.init(Store(applicationContext))
         }

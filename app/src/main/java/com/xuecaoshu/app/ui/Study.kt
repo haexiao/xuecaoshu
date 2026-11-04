@@ -73,7 +73,7 @@ private fun StudyBody(card: Card, onExit: () -> Unit) {
     val p = Ink.palette
     val s = AppState.session ?: return
 
-    val faceFont = cursiveFamily(card.face)
+    val faceFont = cursiveFamily(card.font)
     val promptCursive = card.promptIsCursive
     val answered = s.chosenIndex != -1
     val isRight = s.chosenIndex == card.correctIndex
@@ -168,7 +168,7 @@ private fun StudyBody(card: Card, onExit: () -> Unit) {
                     cursive = c.promptIsCursive,
                     size = if (c.promptIsCursive) 176.sp else 152.sp,
                     color = p.ink,
-                    family = cursiveFamily(c.face)
+                    family = cursiveFamily(c.font)
                 )
             }
         }
@@ -206,7 +206,7 @@ private fun StudyBody(card: Card, onExit: () -> Unit) {
                 tradFace = AppState.tradFaceOf(card.entry.char),
                 inspectChar = inspectChar,
                 promptCursive = promptCursive,
-                face = faceFont
+                faceFont = faceFont
             )
         } else null
         var lastPanel by remember { mutableStateOf<PanelData?>(null) }
@@ -219,10 +219,10 @@ private fun StudyBody(card: Card, onExit: () -> Unit) {
         ) {
             val d = panelNow ?: lastPanel ?: return@AnimatedVisibility
             Column {
-                AnswerPanel(d.char, d.trad, d.tradFace, d.face)
+                AnswerPanel(d.char, d.trad, d.tradFace, d.faceFont)
                 if (d.inspectChar != null) {
                     Spacer(Modifier.height(8.dp))
-                    OtherFormCard(d.inspectChar, d.promptCursive, d.face)
+                    OtherFormCard(d.inspectChar, d.promptCursive, d.faceFont)
                 }
             }
         }
@@ -254,7 +254,7 @@ private data class PanelData(
     val tradFace: Int,
     val inspectChar: String?,
     val promptCursive: Boolean,
-    val face: FontFamily
+    val faceFont: FontFamily
 )
 
 /** 0=默认 1=正确(绿) 2=选错(红) 3=正在查看 4=变暗 */
@@ -381,6 +381,21 @@ private fun OtherFormCard(ch: String, promptCursive: Boolean, face: FontFamily) 
     }
 }
 
+private val PRAISES = listOf(
+    "字字有神", "落笔生风", "渐入佳境", "一气呵成",
+    "下笔有由", "笔笔生花", "行云流水", "铁画银钩",
+    "渐通草法", "一日千里"
+)
+
+private var lastPraise: String? = null
+
+private fun nextPraise(): String {
+    val pool = PRAISES.filter { it != lastPraise }
+    val pick = pool.random()
+    lastPraise = pick
+    return pick
+}
+
 @Composable
 private fun FinishScreen(s: StudySession, onExit: () -> Unit) {
     val p = Ink.palette
@@ -398,10 +413,10 @@ private fun FinishScreen(s: StudySession, onExit: () -> Unit) {
         fade.animateTo(1f, tween(520))
     }
 
-    val praise = remember {
-        listOf("字字有神", "落笔生风", "渐入佳境", "一气呵成", "下笔有由", "笔笔生花").random()
-    }
-    val rate = if (s.total == 0) 0 else s.firstTryCorrect * 100 / s.total
+    // 每次结算换一句，且不和上一句重复
+    val praise = remember(s) { nextPraise() }
+    val rate = if (s.answeredCount == 0) 0
+    else (s.firstTryCorrect * 100 / s.answeredCount).coerceIn(0, 100)
 
     Column(
         Modifier.fillMaxSize().background(p.bg).padding(horizontal = 32.dp),
@@ -434,7 +449,7 @@ private fun FinishScreen(s: StudySession, onExit: () -> Unit) {
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             StatBox("本组", "${s.total}", "字", p)
-            StatBox("一次答对", "${s.firstTryCorrect}", "字", p)
+            StatBox("答对", "${s.firstTryCorrect}/${s.answeredCount}", "次", p)
             StatBox("正确率", "$rate", "%", p)
         }
 

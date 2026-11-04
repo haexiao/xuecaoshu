@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.xuecaoshu.app.AppState
+import com.xuecaoshu.app.CrashLog
 import com.xuecaoshu.app.BuildConfig
 import com.xuecaoshu.app.Feedback
 import com.xuecaoshu.app.data.CursiveFace
@@ -65,6 +66,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     var showClear by remember { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
+    var showCrash by remember { mutableStateOf(false) }
 
     val importer = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -109,13 +111,13 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
                 Divider()
                 DropdownRow(
-                    "学习节奏", "${s.dailyNew} 字 / 天",
-                    listOf("5 字 / 天", "10 字 / 天", "15 字 / 天", "20 字 / 天")
+                    "新学每组", "${s.dailyNew} 字 / 组",
+                    listOf("5 字 / 组", "10 字 / 组", "15 字 / 组", "20 字 / 组")
                 ) { i -> AppState.updateSettings { it.copy(dailyNew = listOf(5, 10, 15, 20)[i]) } }
                 Divider()
                 DropdownRow(
-                    "复习节奏", "${s.dailyReview} 字 / 天",
-                    listOf("5 字 / 天", "10 字 / 天", "15 字 / 天", "20 字 / 天")
+                    "复习每组", "${s.dailyReview} 字 / 组",
+                    listOf("5 字 / 组", "10 字 / 组", "15 字 / 组", "20 字 / 组")
                 ) { i -> AppState.updateSettings { it.copy(dailyReview = listOf(5, 10, 15, 20)[i]) } }
                 Divider()
                 DropdownRow(
@@ -225,6 +227,10 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
                 Divider()
                 ArrowRow("清除学习进度", "清空全部记录") { showClear = true }
+                if (CrashLog.exists(ctx)) {
+                    Divider()
+                    ArrowRow("崩溃日志", "上次异常退出记录") { showCrash = true }
+                }
             }
 
             GroupTitle("关于")
@@ -272,6 +278,7 @@ fun SettingsScreen(onBack: () -> Unit) {
         )
     }
 
+    if (showCrash) InfoDialog("崩溃日志", CrashLog.read(ctx)) { showCrash = false }
     if (showHelp) InfoDialog("说明", HELP_TEXT) { showHelp = false }
     if (showAbout) InfoDialog("关于", ABOUT_TEXT) { showAbout = false }
 }
@@ -303,6 +310,10 @@ ef 由字频决定起点（常用字 2.70，罕用字 2.00），答对 +0.10，�
 可以按 全部 / 未学习 / 复习中 / 复习完成 / 已标熟 筛选，
 也能按字频顺序、字库顺序或乱序排序，右侧有快速滚动条。
 单击一个字切换草书 / 楷书，长按进入多选，能批量标熟、重学、收藏。
+
+· 每组多少字
+新学每组：一次学习取多少个新字（不是每天的上限，学完可以再开一组）。
+复习每组：一次复习最多看多少个到期字。
 
 · 学习顺序
 字频顺序：先学最常用的字（默认）。

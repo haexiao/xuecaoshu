@@ -19,6 +19,22 @@ import kotlin.random.Random
 
 private const val DAY_MS = 24L * 60L * 60L * 1000L
 
+/**
+ * 第 offset 天的 00:00（本地时间）。
+ * 复习按「自然日」调度：今天学完的字，明天零点起就能复习，
+ * 而不是「学完那一刻 + 24 小时」——否则晚上 23 点学的字，
+ * 要等到第二天 23 点才算到期，白天看永远是「没有要复习的」。
+ */
+private fun dayStart(offset: Int): Long {
+    val c = java.util.Calendar.getInstance()
+    c.add(java.util.Calendar.DAY_OF_YEAR, offset)
+    c.set(java.util.Calendar.HOUR_OF_DAY, 0)
+    c.set(java.util.Calendar.MINUTE, 0)
+    c.set(java.util.Calendar.SECOND, 0)
+    c.set(java.util.Calendar.MILLISECOND, 0)
+    return c.timeInMillis
+}
+
 /** 连击达标线：连对 3 次。 */
 const val STREAK_GOAL = 3
 
@@ -30,7 +46,8 @@ data class Card(
     val id: Long = 0L,             // 每张卡唯一，用来驱动换卡动画
     val entry: CharEntry,
     val promptIsCursive: Boolean,
-    val face: Int,                 // 0 = 行云, 1 = 钟齐
+    /** 用哪套草书字体显示：0 行云 / 1 钟齐 / 2 毛体。只影响渲染。 */
+    val font: Int,
     val options: List<String>,
     val correctIndex: Int
 )
@@ -51,6 +68,8 @@ class StudySession(val mode: StudyMode, queue: List<CharEntry>) {
     /** option currently being inspected after answering */
     var inspectIndex by mutableStateOf(-1)
     var firstTryCorrect by mutableStateOf(0)
+    /** 本轮一共作答了多少张卡（含重复出现的字）。 */
+    var answeredCount by mutableStateOf(0)
 
     val answered: Boolean get() = chosenIndex != -1
     val correct: Boolean get() = chosenIndex >= 0 && chosenIndex == current?.correctIndex
@@ -296,6 +315,8 @@ object AppState {
         o.put("day", store.today())
         o.put("total", s.total)
         o.put("done", s.done)
+        o.put("answered", s.answeredCount)
+        o.put("right", s.firstTryCorrect)
         val arr = JSONArray()
         alive.forEach { arr.put(it.char) }
         o.put("pool", arr)
@@ -325,6 +346,8 @@ object AppState {
         ents.shuffled().forEach { s.upcoming.add(it.char) }
         s.total = o.optInt("total", ents.size).coerceAtLeast(ents.size)
         s.done = o.optInt("done", 0).coerceIn(0, s.total)
+        s.answeredCount = o.optInt("answered", 0)
+        s.firstTryCorrect = o.optInt("right", 0)
         return s
     }
 
@@ -401,7 +424,7 @@ object AppState {
             entry = entry,
             promptIsCursive = Random.nextBoolean(),
             // 0 = 行云，1 = 钟齐，2 = 毛体，跟着「草书字体」设置走
-            face = settings.cursiveFace.ordinal,
+            font = settings.cursiveFace.ordinal,
             options = opts,
             correctIndex = opts.indexOf(correct)
         )
@@ -415,19 +438,18 @@ object AppState {
         s.chosenIndex = index
         s.inspectIndex = index
         val isRight = index == card.correctIndex
+        s.answeredCount++
         if (isRight) s.firstTryCorrect++
 
         val now = System.currentTimeMillis()
         val old = baseProgress(card.entry.char)
-        val tomorrow = now + DAY_MS
 
         val np = if (isRight) {
-            val nv = old.face(card.face) + 1
-            var p = old.withFace(card.face, nv)
+            var p = old.copy(f1 = old.f1 + 1)
             when {
                 !p.learned && reachedGoal(p) ->
                     // 刚连对 3 次：进复习队列，明天第一次复习
-                    p.copy(learned = true, interval = 1, dueAt = tomorrow, lastSeen = now)
+                    p.copy(learned = true, interval = 1, dueAt = dayStart(1), lastSeen = now)
 
                 p.learned -> {
                     val ni = (p.interval.coerceAtLeast(1) * p.ef).toInt().coerceIn(1, 400)
@@ -438,20 +460,19 @@ object AppState {
                             dueAt = Long.MAX_VALUE, lastSeen = now
                         )
                     } else {
-                        p.copy(interval = ni, ef = nef, dueAt = now + ni * DAY_MS, lastSeen = now)
+                        p.copy(interval = ni, ef = nef, dueAt = dayStart(ni), lastSeen = now)
                     }
                 }
 
                 else -> p.copy(lastSeen = now)
             }
         } else {
-            var p = old.withFace(card.face, 0)
-                .copy(wrong = old.wrong + 1, lastSeen = now)
+            var p = old.copy(f1 = 0, wrong = old.wrong + 1, lastSeen = now)
             p = if (old.learned) {
                 p.copy(
                     interval = 1,
                     ef = (old.ef - 0.2f).coerceAtLeast(1.3f),
-                    dueAt = tomorrow
+                    dueAt = dayStart(1)
                 )
             } else {
                 p.copy(dueAt = now)
@@ -479,12 +500,12 @@ object AppState {
         val card = s.current ?: return
         s.revealed = true
         s.chosenIndex = -2
+        s.answeredCount++
         val now = System.currentTimeMillis()
         val old = baseProgress(card.entry.char)
-        var np = old.withFace(card.face, 0)
-            .copy(wrong = old.wrong + 1, lastSeen = now)
+        var np = old.copy(f1 = 0, wrong = old.wrong + 1, lastSeen = now)
         np = if (old.learned) {
-            np.copy(interval = 1, ef = (old.ef - 0.2f).coerceAtLeast(1.3f), dueAt = now + DAY_MS)
+            np.copy(interval = 1, ef = (old.ef - 0.2f).coerceAtLeast(1.3f), dueAt = dayStart(1))
         } else {
             np.copy(dueAt = now)
         }
@@ -510,7 +531,7 @@ object AppState {
             progress[ch] = old.copy(
                 f1 = STREAK_GOAL, f2 = STREAK_GOAL,
                 learned = true, mastered = false, interval = 1,
-                dueAt = now + DAY_MS, lastSeen = now
+                dueAt = dayStart(1), lastSeen = now
             )
         }
         persist()
@@ -531,8 +552,7 @@ object AppState {
 
     fun starBatch(chars: Collection<String>, on: Boolean) {
         chars.forEach { ch ->
-            val old = progressOf(ch)
-            progress[ch] = old.copy(starred = on)
+            progress[ch] = baseProgress(ch).copy(starred = on)
         }
         persist()
     }
@@ -540,7 +560,9 @@ object AppState {
     fun toggleStar() {
         val s = session ?: return
         val card = s.current ?: return
-        val old = progressOf(card.entry.char)
+        // 用 baseProgress：没记录的字先把字频先验填进去，
+        // 否则收藏出来的记录 ef 会是默认 2.5，跟正常学会的字不一致
+        val old = baseProgress(card.entry.char)
         progress[card.entry.char] = old.copy(starred = !old.starred)
         persist()
     }
@@ -556,7 +578,8 @@ object AppState {
         val key = store.today()
         val cur = stats[key] ?: DayStat()
         val now = SystemClock.elapsedRealtime()
-        val secs = ((now - tickAt) / 1000L).toInt().coerceIn(0, 1800)
+        // 挂机不算学习时间：单次间隔超过 2 分钟就按 2 分钟封顶
+        val secs = ((now - tickAt) / 1000L).toInt().coerceIn(0, 120)
         tickAt = now
         stats[key] = when (kind) {
             "l" -> cur.copy(learned = cur.learned + 1, seconds = cur.seconds + secs)
@@ -590,6 +613,9 @@ object AppState {
     fun clearProgress() {
         progress.clear()
         stats.clear()
+        store.dropBackup()
+        store.clearSession()
+        session = null
         persist()
     }
 
@@ -600,6 +626,9 @@ object AppState {
             progress.putAll(store.loadProgress())
             stats.clear()
             stats.putAll(store.loadStats())
+            // 导入的是另一份存档，原来的半截会话已经对不上了
+            store.clearSession()
+            session = null
             dataVersion++
         }
         ok

@@ -26,8 +26,7 @@ data class CharProgress(
     val dueAt: Long = 0L,
     val lastSeen: Long = 0L
 ) {
-    fun face(i: Int): Int = if (i == 0) f1 else f2
-    fun withFace(i: Int, v: Int): CharProgress = if (i == 0) copy(f1 = v) else copy(f2 = v)
+    // 连击只用 f1；f2 是早期「两种草书都学」留下的字段，保留读兼容不再写入
 }
 
 /** Per-day counters used by the charts. */

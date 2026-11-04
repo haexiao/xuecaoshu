@@ -225,7 +225,7 @@ private val PUNCT = charArrayOf(
 
 private fun splitQuote(text: String): List<String> {
     val parts = text.split(*PUNCT).map { it.trim() }.filter { it.isNotEmpty() }
-    return if (parts.isEmpty()) listOf(text) else parts.take(4)
+    return if (parts.isEmpty()) listOf(text) else parts
 }
 
 /** 按字数挑一个能塞进竖排区域的字号。 */

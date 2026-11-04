@@ -105,15 +105,31 @@ class Store(private val ctx: Context) {
         }
     }
 
-    /** 主文件不见了但备份还在，就用备份顶上。 */
+    /**
+     * 主文件不存在、太短、或者 JSON 解析不出来时，用备份顶上。
+     * 注意：主动「清除学习进度」后主文件是合法的空进度，不会被误恢复
+     * —— 因为 clearProgress 会同时删掉备份。
+     */
     fun restoreFromBackupIfMissing(): Boolean = runCatching {
         val f = progressFile()
         val bak = backupFile()
-        if (f.exists() && f.length() >= 20) return false
         if (!bak.exists() || bak.length() < 20) return false
-        bak.copyTo(f, overwrite = true)
-        true
+        if (!f.exists() || f.length() < 20) {
+            bak.copyTo(f, overwrite = true)
+            return true
+        }
+        val ok = runCatching { JSONObject(f.readText()) }.isSuccess
+        if (!ok) {
+            bak.copyTo(f, overwrite = true)
+            return true
+        }
+        false
     }.getOrDefault(false)
+
+    /** 用户主动清进度时，备份也要一起作废，否则会被自动恢复回来。 */
+    fun dropBackup() {
+        runCatching { backupFile().delete() }
+    }
 
     fun loadProgress(): MutableMap<String, CharProgress> {
         val map = HashMap<String, CharProgress>()
@@ -135,16 +151,32 @@ class Store(private val ctx: Context) {
                 // schema 2 里 f1/f2 是「累计答对次数」，当连击用会虚高，封顶到 3；
                 // schema 3 起它们就是连击，复习答对还能继续加，不能再压。
                 val legacy = root.optInt("schema", 2) < 3
+                // 老的到期时间是「学完时刻 + 24 小时」，统一对齐到当天 00:00，
+                // 这样复习按自然日走，不会出现「晚上 23 点学的要等第二天 23 点」。
+                val rawDue = o.optLong("d", 0L)
+                val due = if (rawDue > 0L && rawDue < Long.MAX_VALUE / 2) {
+                    val c = java.util.Calendar.getInstance()
+                    c.timeInMillis = rawDue
+                    c.set(java.util.Calendar.HOUR_OF_DAY, 0)
+                    c.set(java.util.Calendar.MINUTE, 0)
+                    c.set(java.util.Calendar.SECOND, 0)
+                    c.set(java.util.Calendar.MILLISECOND, 0)
+                    c.timeInMillis
+                } else rawDue
+                // f2 是历史遗留：早期「两种草书都学」用它存另一套连击，
+                // 后来字体编号误当槽位时也写进过 f2。连击只认 f1，
+                // 这里把 f2 合并回来，免得换过字体的用户进度凭空清零。
+                val streak = maxOf(f1, f2)
                 map[ch] = CharProgress(
-                    f1 = if (legacy) f1.coerceIn(0, 3) else f1,
-                    f2 = if (legacy) f2.coerceIn(0, 3) else f2,
+                    f1 = if (legacy) streak.coerceIn(0, 3) else streak,
+                    f2 = 0,
                     ef = ef.coerceIn(1.3f, 3.0f),
                     interval = interval,
                     mastered = o.optBoolean("m", false),
                     wrong = o.optInt("w", 0),
                     starred = o.optBoolean("s", false),
                     learned = learned,
-                    dueAt = o.optLong("d", 0L),
+                    dueAt = due,
                     lastSeen = o.optLong("t", 0L)
                 )
             }
