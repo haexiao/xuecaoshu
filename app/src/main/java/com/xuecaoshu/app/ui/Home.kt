@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -83,6 +85,9 @@ fun HomeScreen(
 
     val unlearned = AppState.unlearnedCount()
     val due = AppState.dueCount()
+
+    // 还有没复习完的字时，点「学习」先劝一句
+    var askReview by remember { mutableStateOf(0) }
 
     Column(
         Modifier
@@ -199,7 +204,10 @@ fun HomeScreen(
             EntryButton(
                 Modifier.weight(1f), "学习", unlearned, "字待学",
                 enabled = unlearned > 0
-            ) { onStartStudy(StudyMode.LEARN) }
+            ) {
+                val pending = AppState.pendingReviewCount()
+                if (pending > 0) askReview = pending else onStartStudy(StudyMode.LEARN)
+            }
             EntryButton(
                 Modifier.weight(1f), "复习", due, "字到期",
                 enabled = due > 0
@@ -214,6 +222,38 @@ fun HomeScreen(
         }
 
         Spacer(Modifier.height(14.dp))
+    }
+
+    if (askReview > 0) {
+        AlertDialog(
+            onDismissRequest = { askReview = 0 },
+            containerColor = p.card,
+            titleContentColor = p.ink,
+            textContentColor = p.ink2,
+            title = { Text("先复习一下？", fontSize = 16.sp, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "还有 $askReview 个字等你来复习哦，建议先复习再学习",
+                    fontSize = 14.sp, lineHeight = 22.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    askReview = 0
+                    onStartStudy(StudyMode.REVIEW)
+                }) {
+                    Text("马上复习", color = p.accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    askReview = 0
+                    onStartStudy(StudyMode.LEARN)
+                }) {
+                    Text("仍然学习", color = p.ink2, fontSize = 14.sp)
+                }
+            }
+        )
     }
 }
 

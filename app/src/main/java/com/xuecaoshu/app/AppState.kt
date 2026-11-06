@@ -84,6 +84,10 @@ object AppState {
     private val EMPTY = CharProgress()
     var book by mutableStateOf<List<CharEntry>>(emptyList())
         private set
+    private val levelMap = HashMap<String, Int>(8192)
+
+    /** 这个字属于一级还是二级（干扰项按级配平用）。 */
+    fun levelOf(ch: String): Int = levelMap[ch] ?: 1
     var similar by mutableStateOf<Map<String, List<String>>>(emptyMap())
         private set
     var variants by mutableStateOf<Map<String, TradVariant>>(emptyMap())
@@ -109,6 +113,8 @@ object AppState {
     fun init(s: Store) {
         store = s
         book = s.loadBooks()
+        levelMap.clear()
+        book.forEach { levelMap[it.char] = it.level }
         byLevel.clear()
         book.groupBy { it.level }.forEach { (k, v) -> byLevel[k] = v }
         similar = s.loadSimilar()
@@ -276,10 +282,11 @@ object AppState {
 
     fun startSession(mode: StudyMode) {
         tickAt = SystemClock.elapsedRealtime()
-        // 学习模式：今天没学完的那一轮接着学
+        // 只有学习续接：复习是每次点进去才分组，中途退出后没复习的字
+        // 自然还是「到期」状态，下次点复习重新成组
         if (mode == StudyMode.LEARN) {
             val restored = restoreSession()
-            if (restored != null) {
+            if (restored != null && restored.mode == StudyMode.LEARN) {
                 session = restored
                 nextCard()
                 return
@@ -290,6 +297,9 @@ object AppState {
         saveSessionState()
     }
 
+    /** 学习前提醒用：当前总共有多少字等着复习。 */
+    fun pendingReviewCount(): Int = dueCount()
+
     fun endSession() {
         saveSessionState()
         session = null
@@ -299,11 +309,16 @@ object AppState {
     private fun entryOf(ch: String): CharEntry? =
         charsOfLevel(settings.level).firstOrNull { it.char == ch }
 
-    /** 只存「今天这一轮学习还没学完的部分」。 */
+    /**
+     * 只存「今天这一轮学习还没学完的部分」。
+     * 复习不存：复习是点进去那一刻按到期字现分组，中途退出后已复习的字
+     * 到期时间已经往后挪，没复习的仍然到期，下次重新成组即可。
+     * 复习时也不动存档，免得把没学完的那一轮顶掉。
+     */
     private fun saveSessionState() {
         val s = session
         if (s == null || s.mode != StudyMode.LEARN) {
-            store.clearSession()
+            if (s == null) store.clearSession()
             return
         }
         val alive = s.pool.filter { !progressOf(it.char).learned }
@@ -312,6 +327,7 @@ object AppState {
             return
         }
         val o = JSONObject()
+        o.put("mode", s.mode.name)
         o.put("day", store.today())
         o.put("total", s.total)
         o.put("done", s.done)
@@ -341,9 +357,13 @@ object AppState {
             store.clearSession()
             return null
         }
-        val s = StudySession(StudyMode.LEARN, ents)
-        s.upcoming.clear()
-        ents.shuffled().forEach { s.upcoming.add(it.char) }
+        val mode = runCatching { StudyMode.valueOf(o.optString("mode", "LEARN")) }
+            .getOrDefault(StudyMode.LEARN)
+        val s = StudySession(mode, ents)
+        if (mode == StudyMode.LEARN) {
+            s.upcoming.clear()
+            ents.shuffled().forEach { s.upcoming.add(it.char) }
+        }
         s.total = o.optInt("total", ents.size).coerceAtLeast(ents.size)
         s.done = o.optInt("done", 0).coerceIn(0, s.total)
         s.answeredCount = o.optInt("answered", 0)
@@ -407,16 +427,19 @@ object AppState {
         val correct = entry.char
 
 
-        // 干扰项：优先取形近字
-        val picked = LinkedHashSet<String>()
-        similar[correct]?.forEach { c ->
-            if (picked.size < 3 && c != correct && c.length == 1) picked.add(c)
-        }
+        // 干扰项：从形近字里随机挑 3 个
+        //  - 剔除纯部件字（字频为 0 的基本都是 宀/丌/乇 这类偏旁）
+        //  - 一级字尽量配一级干扰项，二级字随便
+        val cands = (similar[correct] ?: emptyList())
+            .filter { it != correct && it.length == 1 && freqRank(it) > 0 }
+        val sameLevel = if (levelOf(correct) == 1) cands.filter { levelOf(it) == 1 } else emptyList()
+        val ordered = (sameLevel + cands).distinct()
+        val picked = LinkedHashSet(ordered.shuffled(Random(System.nanoTime())).take(3))
         var guard = 0
         while (picked.size < 3 && guard < 400) {
             guard++
             val c = pool[Random.nextInt(pool.size)].char
-            if (c != correct) picked.add(c)
+            if (c != correct && freqRank(c) > 0) picked.add(c)
         }
         val opts = (picked + correct).shuffled(Random(System.nanoTime()))
         return Card(
