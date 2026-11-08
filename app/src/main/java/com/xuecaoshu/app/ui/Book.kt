@@ -36,6 +36,8 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -58,7 +60,7 @@ import kotlin.math.ceil
 import kotlin.random.Random
 
 enum class Metric { COUNT, TIME }
-enum class Period { WEEK, MONTH, YEAR }
+enum class ChartView { WEEK, MONTH }
 
 @Composable
 fun BookScreen(onBack: () -> Unit) {
@@ -78,8 +80,10 @@ fun BookScreen(onBack: () -> Unit) {
 private fun BookHome(onBack: () -> Unit, onOpenList: (String) -> Unit) {
     val p = Ink.palette
     var metric by remember { mutableStateOf(Metric.COUNT) }
-    var period by remember { mutableStateOf(Period.WEEK) }
+    var view by remember { mutableStateOf(ChartView.WEEK) }
     var selected by remember { mutableStateOf(-1) }
+    // 换视图时清掉选中，避免下标越界
+    LaunchedEffect(view) { selected = -1 }
 
     val total = AppState.charsOfLevel(AppState.settings.level).size
     val learned = AppState.learnedCount()
@@ -88,10 +92,10 @@ private fun BookHome(onBack: () -> Unit, onOpenList: (String) -> Unit) {
     val today = AppState.todayStat()
     val all = AppState.totalStat()
 
-    val series = when (period) {
-        Period.WEEK -> AppState.weekSeries()
-        Period.MONTH -> AppState.monthSeries()
-        Period.YEAR -> AppState.yearSeries()
+    val series = if (view == ChartView.WEEK) {
+        AppState.daySeries(AppState.historyDays())
+    } else {
+        AppState.monthSeries12()
     }
 
     Column(
@@ -151,15 +155,13 @@ private fun BookHome(onBack: () -> Unit, onOpenList: (String) -> Unit) {
             Spacer(Modifier.size(6.dp))
             Chip("时间", metric == Metric.TIME) { metric = Metric.TIME }
             Spacer(Modifier.weight(1f))
-            Chip("周", period == Period.WEEK) { period = Period.WEEK; selected = -1 }
+            Chip("最近一周", view == ChartView.WEEK) { view = ChartView.WEEK }
             Spacer(Modifier.size(6.dp))
-            Chip("月", period == Period.MONTH) { period = Period.MONTH; selected = -1 }
-            Spacer(Modifier.size(6.dp))
-            Chip("年", period == Period.YEAR) { period = Period.YEAR; selected = -1 }
+            Chip("按月查看", view == ChartView.MONTH) { view = ChartView.MONTH }
         }
         Spacer(Modifier.height(10.dp))
         TrendChart(
-            series, metric, period, selected,
+            series, metric, view, selected,
             modifier = Modifier.weight(1f)
         ) { selected = it }
         Spacer(Modifier.height(8.dp))
@@ -248,15 +250,19 @@ private fun Chip(text: String, on: Boolean, onClick: () -> Unit) {
 private fun TrendChart(
     series: List<Pair<String, DayStat>>,
     metric: Metric,
-    period: Period,
+    view: ChartView,
     selected: Int,
     modifier: Modifier = Modifier,
     onSelect: (Int) -> Unit
 ) {
     val p = Ink.palette
 
-    val labels = remember(series, period) {
-        series.mapIndexed { i, (key, _) -> axisLabel(key, period, i, series.size) }
+    // 柱子等宽：一周视图用固定宽度（可横滑），月视图平分 12 格
+    val barW = if (view == ChartView.WEEK) 34.dp else 0.dp
+    val scroll = rememberScrollState()
+    // 一周视图默认滑到最右（最近的一天）
+    LaunchedEffect(series.size, view, scroll.maxValue) {
+        if (view == ChartView.WEEK) scroll.scrollTo(scroll.maxValue)
     }
 
     val learnedVals = series.map { it.second.learned }
@@ -269,151 +275,112 @@ private fun TrendChart(
         timeVals.maxOrNull() ?: 0
     }.coerceAtLeast(1)
 
-    Column(modifier.fillMaxWidth()) {
-        // 柱子区域占满剩下的高度，一直画到屏幕底
-        BoxWithConstraints(
-            Modifier.fillMaxWidth().weight(1f)
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val areaH = maxHeight - 44.dp          // 上面一行数字 + 下面一行日期
+        Row(
+            Modifier
+                .fillMaxSize()
+                .then(
+                    if (view == ChartView.WEEK)
+                        Modifier.horizontalScroll(scroll)
+                    else Modifier
+                ),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.Bottom
         ) {
-            val areaH = maxHeight
-            Row(
-                Modifier.fillMaxSize(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                series.forEachIndexed { i, _ ->
-                    val on = i == selected
-                    val a = learnedVals[i]
-                    val b = reviewVals[i]
-                    val total = if (metric == Metric.COUNT) a + b else timeVals[i]
+            series.forEachIndexed { i, (key, _) ->
+                val on = i == selected
+                val a = learnedVals[i]
+                val b = reviewVals[i]
+                val total = if (metric == Metric.COUNT) a + b else timeVals[i]
+                val label = if (view == ChartView.WEEK) key.takeLast(5) else key.takeLast(2)
+                val tip = if (metric == Metric.COUNT) "$total"
+                else "${ceil(timeVals[i] / 60.0).toInt()}"
+
+                Column(
+                    Modifier
+                        .then(
+                            if (view == ChartView.WEEK)
+                                Modifier.width(barW)
+                            else Modifier.weight(1f)
+                        )
+                        .fillMaxHeight()
+                        .pointerInput(i) {
+                            detectTapGestures { onSelect(if (selected == i) -1 else i) }
+                        }
+                ) {
+                    // 选中的柱子：数字写在柱子上面
+                    Text(
+                        if (on) tip else "",
+                        color = if (metric == Metric.COUNT) p.ink else p.ink,
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                        modifier = Modifier.fillMaxWidth().height(16.dp),
+                        textAlign = TextAlign.Center
+                    )
 
                     Box(
-                        Modifier.weight(1f).fillMaxHeight().pointerInput(i) {
-                            detectTapGestures { onSelect(if (selected == i) -1 else i) }
-                        },
+                        Modifier.weight(1f).fillMaxWidth(),
                         contentAlignment = Alignment.BottomCenter
                     ) {
                         if (total == 0) {
                             Box(
-                                Modifier.fillMaxWidth().height(2.dp)
+                                Modifier.fillMaxWidth(0.7f).height(2.dp)
                                     .clip(RoundedCornerShape(1.dp))
                                     .background(p.line)
                             )
-                        } else {
-                            val barW = if (on) 1f else 0.82f
+                        } else if (metric == Metric.COUNT) {
                             Column(
-                                Modifier.fillMaxWidth(barW),
+                                Modifier.fillMaxWidth(0.72f),
                                 verticalArrangement = Arrangement.Bottom
                             ) {
-                                if (metric == Metric.COUNT) {
-                                    if (b > 0) {
-                                        Box(
-                                            Modifier.fillMaxWidth()
-                                                .height(areaH * (b.toFloat() / maxTotal))
-                                                .clip(
-                                                    RoundedCornerShape(
-                                                        topStart = 4.dp, topEnd = 4.dp
-                                                    )
-                                                )
-                                                .background(
-                                                    if (on) p.good
-                                                    else p.good.copy(alpha = 0.65f)
-                                                )
+                                if (b > 0) Box(
+                                    Modifier.fillMaxWidth()
+                                        .height(areaH * (b.toFloat() / maxTotal))
+                                        .clip(
+                                            RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)
                                         )
-                                    }
-                                    if (a > 0) {
-                                        Box(
-                                            Modifier.fillMaxWidth()
-                                                .height(areaH * (a.toFloat() / maxTotal))
-                                                .clip(
-                                                    if (b > 0) RoundedCornerShape(0.dp)
-                                                    else RoundedCornerShape(
-                                                        topStart = 4.dp, topEnd = 4.dp
-                                                    )
-                                                )
-                                                .background(
-                                                    if (on) p.accent
-                                                    else p.accent.copy(alpha = 0.6f)
-                                                )
+                                        .background(if (on) p.good else p.good.copy(alpha = 0.6f))
+                                )
+                                if (a > 0) Box(
+                                    Modifier.fillMaxWidth()
+                                        .height(areaH * (a.toFloat() / maxTotal))
+                                        .clip(
+                                            if (b > 0) RoundedCornerShape(0.dp)
+                                            else RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)
                                         )
-                                    }
-                                } else {
-                                    Box(
-                                        Modifier.fillMaxWidth()
-                                            .height(
-                                                (areaH * (total.toFloat() / maxTotal))
-                                                    .coerceAtLeast(3.dp)
-                                            )
-                                            .clip(
-                                                RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)
-                                            )
-                                            .background(
-                                                if (on) p.ink else p.ink.copy(alpha = 0.45f)
-                                            )
-                                    )
-                                }
+                                        .background(if (on) p.accent else p.accent.copy(alpha = 0.6f))
+                                )
                             }
+                        } else {
+                            Box(
+                                Modifier.fillMaxWidth(0.72f)
+                                    .height(
+                                        (areaH * (total.toFloat() / maxTotal))
+                                            .coerceAtLeast(3.dp)
+                                    )
+                                    .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                                    .background(
+                                        if (on) p.ink else p.ink.copy(alpha = 0.45f)
+                                    )
+                            )
                         }
                     }
+
+                    Text(
+                        label,
+                        color = if (on) p.accent else p.muted,
+                        fontSize = 8.sp,
+                        maxLines = 1,
+                        modifier = Modifier.fillMaxWidth().height(16.dp),
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
-        }
-
-        Spacer(Modifier.height(6.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            labels.forEachIndexed { i, label ->
-                Text(
-                    label,
-                    color = if (i == selected) p.accent else p.muted,
-                    fontSize = 8.sp,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (metric == Metric.COUNT) {
-                Legend(p.accent, "新学")
-                Spacer(Modifier.width(14.dp))
-                Legend(p.good, "复习")
-            } else {
-                Legend(p.ink.copy(alpha = 0.45f), "学习时长")
-            }
-        }
-
-        if (selected in series.indices) {
-            Spacer(Modifier.height(8.dp))
-            val st = series[selected].second
-            Box(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                    .background(p.card).padding(horizontal = 14.dp, vertical = 10.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(series[selected].first, color = p.muted, fontSize = 11.sp)
-                    Spacer(Modifier.size(12.dp))
-                    if (metric == Metric.COUNT) {
-                        Text("新学 ${st.learned} 字", color = p.accent, fontSize = 12.sp)
-                        Spacer(Modifier.size(12.dp))
-                        Text("复习 ${st.reviewed} 字", color = p.good, fontSize = 12.sp)
-                        Spacer(Modifier.weight(1f))
-                        Text("共 ${st.learned + st.reviewed} 字", color = p.ink2, fontSize = 12.sp)
-                    } else {
-                        Text(
-                            "共 ${ceil(st.seconds / 60.0).toInt()} 分钟",
-                            color = p.ink2, fontSize = 12.sp
-                        )
-                    }
-                }
-            }
-        } else {
-            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
-/** 图例小方块。 */
 @Composable
 private fun Legend(color: Color, text: String) {
     val p = Ink.palette
@@ -427,21 +394,6 @@ private fun Legend(color: Color, text: String) {
 }
 
 /** 周显示星期，月显示日期，年显示月份。 */
-private fun axisLabel(key: String, period: Period, index: Int, size: Int): String {
-    return when (period) {
-        Period.WEEK -> {
-            val cal = Calendar.getInstance()
-            cal.time = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-                .parse(key) ?: return ""
-            val names = arrayOf("日", "一", "二", "三", "四", "五", "六")
-            names[cal.get(Calendar.DAY_OF_WEEK) - 1]
-        }
-        Period.MONTH -> {
-            if (index % 5 == 0 || index == size - 1) key.takeLast(2) else ""
-        }
-        Period.YEAR -> key.takeLast(2)
-    }
-}
 
 // ------------------------------------------------------------------ 字表
 /** 列表里每一格需要的东西，全部提前算好，滚动时不再查 map。 */
@@ -451,6 +403,7 @@ private data class CharCell(
     val learned: Boolean,
     val mastered: Boolean,
     val starred: Boolean,
+    val known: Boolean,
     val rank: Int
 )
 
@@ -480,7 +433,7 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                 1 -> !g.learned
                 2 -> g.learned && !g.mastered
                 3 -> g.mastered
-                4 -> g.starred
+                4 -> g.known
                 else -> true
             }
             if (keep) {
@@ -491,6 +444,7 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                         learned = g.learned,
                         mastered = g.mastered,
                         starred = g.starred,
+                        known = g.known,
                         rank = AppState.freq[e.char] ?: Int.MAX_VALUE
                     )
                 )

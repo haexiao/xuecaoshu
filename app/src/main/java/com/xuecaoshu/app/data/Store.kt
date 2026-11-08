@@ -175,6 +175,7 @@ class Store(private val ctx: Context) {
                     mastered = o.optBoolean("m", false),
                     wrong = o.optInt("w", 0),
                     starred = o.optBoolean("s", false),
+                    known = o.optBoolean("k", false),
                     learned = learned,
                     dueAt = due,
                     lastSeen = o.optLong("t", 0L)
@@ -198,6 +199,7 @@ class Store(private val ctx: Context) {
                     if (p.mastered) put("m", true)
                     put("w", p.wrong)
                     put("s", p.starred)
+                    put("k", p.known)
                     put("l", p.learned)
                     put("d", p.dueAt)
                     put("t", p.lastSeen)

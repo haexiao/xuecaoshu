@@ -222,6 +222,46 @@ object AppState {
     fun weekSeries(): List<Pair<String, DayStat>> =
         (6 downTo 0).map { dayKey(it) to (stats[dayKey(it)] ?: DayStat()) }
 
+    /** 最近 n 天（含今天），从旧到新。 */
+    fun daySeries(n: Int): List<Pair<String, DayStat>> =
+        (n - 1 downTo 0).map { dayKey(it) to (stats[dayKey(it)] ?: DayStat()) }
+
+    /** 从有记录的第一天到今天一共多少天（至少 30、最多 180），保证总能往左滑看更早。 */
+    fun historyDays(): Int {
+        val first = stats.keys.minOrNull() ?: return 7
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        val start = runCatching { fmt.parse(first) }.getOrNull() ?: return 7
+        val days = ((System.currentTimeMillis() - start.time) / 86_400_000L).toInt() + 1
+        return days.coerceIn(30, 180)
+    }
+
+    /** 最近 12 个月（含本月），从旧到新。 */
+    fun monthSeries12(): List<Pair<String, DayStat>> {
+        val fmt = java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.US)
+        val cal = java.util.Calendar.getInstance()
+        cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        cal.add(java.util.Calendar.MONTH, -11)
+        val out = ArrayList<Pair<String, DayStat>>(12)
+        repeat(12) {
+            val key = fmt.format(cal.time)
+            var l = 0
+            var r = 0
+            var sec = 0
+            stats.forEach { (k, v) ->
+                if (k.startsWith(key)) {
+                    l += v.learned; r += v.reviewed; sec += v.seconds
+                }
+            }
+            out.add(key to DayStat(l, r, sec))
+            cal.add(java.util.Calendar.MONTH, 1)
+        }
+        return out
+    }
+
     /** 30 days, oldest first. */
     fun monthSeries(): List<Pair<String, DayStat>> =
         (29 downTo 0).map { dayKey(it) to (stats[dayKey(it)] ?: DayStat()) }
@@ -553,7 +593,7 @@ object AppState {
             val old = baseProgress(ch)
             progress[ch] = old.copy(
                 f1 = STREAK_GOAL, f2 = STREAK_GOAL,
-                learned = true, mastered = false, interval = 1,
+                learned = true, known = true, mastered = false, interval = 1,
                 dueAt = dayStart(1), lastSeen = now
             )
         }
@@ -564,6 +604,7 @@ object AppState {
     fun resetBatch(chars: Collection<String>) {
         chars.forEach { ch ->
             val old = progress[ch] ?: return@forEach
+            // 重学：连击、标熟标记都清掉，但保留收藏
             progress[ch] = CharProgress(
                 ef = efPrior(ch),
                 wrong = old.wrong,

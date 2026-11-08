@@ -23,6 +23,7 @@ data class CharProgress(
     val wrong: Int = 0,
     val starred: Boolean = false,
     val learned: Boolean = false,  // 连击达标，进入复习
+    val known: Boolean = false,    // 手动点「熟」标熟的，和正常学会区分开
     val dueAt: Long = 0L,
     val lastSeen: Long = 0L
 ) {

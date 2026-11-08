@@ -15,7 +15,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.SideEffect
@@ -71,7 +71,8 @@ class MainActivity : ComponentActivity() {
                     Box(
                         Modifier
                             .fillMaxSize()
-                            .windowInsetsPadding(WindowInsets.safeDrawing)
+                            // 只用状态栏/导航栏的边距，不含输入法——否则键盘一弹整个界面会被压扁
+                            .windowInsetsPadding(WindowInsets.systemBars)
                     ) {
                         AnimatedContent(
                             targetState = screen,
