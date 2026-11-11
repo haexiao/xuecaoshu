@@ -163,6 +163,9 @@ class Store(private val ctx: Context) {
                     c.set(java.util.Calendar.MILLISECOND, 0)
                     c.timeInMillis
                 } else rawDue
+                // 标熟的新语义：视为已会、永不复习。
+                // 旧版本标熟只打了 k 标记、仍然排复习，这里统一纠正过来。
+                val isKnown = o.optBoolean("k", false)
                 // f2 是历史遗留：早期「两种草书都学」用它存另一套连击，
                 // 后来字体编号误当槽位时也写进过 f2。连击只认 f1，
                 // 这里把 f2 合并回来，免得换过字体的用户进度凭空清零。
@@ -172,12 +175,13 @@ class Store(private val ctx: Context) {
                     f2 = 0,
                     ef = ef.coerceIn(1.3f, 3.0f),
                     interval = interval,
-                    mastered = o.optBoolean("m", false),
+                    // 标熟的一律按「已会、永不复习」纠正（旧版本标熟仍会排复习）
+                    mastered = o.optBoolean("m", false) || isKnown,
                     wrong = o.optInt("w", 0),
                     starred = o.optBoolean("s", false),
-                    known = o.optBoolean("k", false),
-                    learned = learned,
-                    dueAt = due,
+                    known = isKnown,
+                    learned = learned || isKnown,
+                    dueAt = if (isKnown) Long.MAX_VALUE else due,
                     lastSeen = o.optLong("t", 0L)
                 )
             }
@@ -262,6 +266,7 @@ class Store(private val ctx: Context) {
     fun loadSettings(): Settings = Settings(
         darkTheme = prefs.getBoolean("dark", false),
         level = prefs.getInt("level", 1),
+        starredBook = prefs.getBoolean("starredBook", false),
         cursiveFace = when (prefs.getInt("face", 0)) {
             1 -> CursiveFace.ZHONGQI
             2 -> CursiveFace.MAOTI
@@ -294,6 +299,7 @@ class Store(private val ctx: Context) {
         prefs.edit()
             .putBoolean("dark", s.darkTheme)
             .putInt("level", s.level)
+            .putBoolean("starredBook", s.starredBook)
             .putInt("face", when (s.cursiveFace) {
                 CursiveFace.XINGYUN -> 0
                 CursiveFace.ZHONGQI -> 1

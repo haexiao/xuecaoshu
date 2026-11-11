@@ -77,11 +77,16 @@ class MainActivity : ComponentActivity() {
                         AnimatedContent(
                             targetState = screen,
                             transitionSpec = {
-                                (fadeIn(tween(220)) + slideInHorizontally(tween(220)) { it / 10 })
-                                    .togetherWith(
-                                        fadeOut(tween(150)) +
-                                            slideOutHorizontally(tween(220)) { -it / 12 }
-                                    )
+                                // 回主页面 = 后退（从右侧滑出），其余 = 前进（从右侧滑入）
+                                val back = targetState == Screen.HOME
+                                val dir = if (back) -1 else 1
+                                (
+                                    fadeIn(tween(200)) +
+                                        slideInHorizontally(tween(240)) { dir * it / 8 }
+                                    ).togetherWith(
+                                    fadeOut(tween(160)) +
+                                        slideOutHorizontally(tween(240)) { -dir * it / 10 }
+                                )
                             },
                             label = "screen"
                         ) { current ->

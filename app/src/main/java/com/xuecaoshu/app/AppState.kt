@@ -131,16 +131,25 @@ object AppState {
 
     // --------------------------------------------------------------- queries
     /** level: 1 = 一级，2 = 二级，0 = 一级 + 二级。 */
-    fun charsOfLevel(level: Int): List<CharEntry> = when (level) {
-        0 -> (byLevel[1] ?: emptyList()) + (byLevel[2] ?: emptyList())
-        else -> byLevel[level] ?: emptyList()
+    fun charsOfLevel(level: Int): List<CharEntry> {
+        // 字库来源切成「我的收藏」时，学习 / 复习 / 统计都只看收藏的字
+        if (settings.starredBook) {
+            return book.filter { progress[it.char]?.starred == true }
+        }
+        return when (level) {
+            0 -> (byLevel[1] ?: emptyList()) + (byLevel[2] ?: emptyList())
+            else -> byLevel[level] ?: emptyList()
+        }
     }
 
     val levelName: String
-        get() = when (settings.level) {
-            0 -> "GB2312 一级 + 二级"
-            2 -> "GB2312 二级"
-            else -> "GB2312 一级"
+        get() {
+            if (settings.starredBook) return "我的收藏"
+            return when (settings.level) {
+                0 -> "GB2312 一级 + 二级"
+                2 -> "GB2312 二级"
+                else -> "GB2312 一级"
+            }
         }
 
     fun progressOf(ch: String): CharProgress = progress[ch] ?: EMPTY
@@ -235,8 +244,19 @@ object AppState {
         return days.coerceIn(30, 180)
     }
 
-    /** 最近 12 个月（含本月），从旧到新。 */
-    fun monthSeries12(): List<Pair<String, DayStat>> {
+    /** 从有记录的第一个月到现在的月数（至少 12、最多 36），用于按月视图横滑。 */
+    fun historyMonths(): Int {
+        val first = stats.keys.minOrNull() ?: return 12
+        val fy = first.take(4).toIntOrNull() ?: return 12
+        val fm = first.drop(5).take(2).toIntOrNull() ?: return 12
+        val cal = java.util.Calendar.getInstance()
+        val months = (cal.get(java.util.Calendar.YEAR) - fy) * 12 +
+            (cal.get(java.util.Calendar.MONTH) + 1 - fm) + 1
+        return months.coerceIn(12, 36)
+    }
+
+    /** 最近 n 个月（含本月），从旧到新。 */
+    fun monthSeries12(n: Int = 12): List<Pair<String, DayStat>> {
         val fmt = java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.US)
         val cal = java.util.Calendar.getInstance()
         cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
@@ -244,9 +264,10 @@ object AppState {
         cal.set(java.util.Calendar.MINUTE, 0)
         cal.set(java.util.Calendar.SECOND, 0)
         cal.set(java.util.Calendar.MILLISECOND, 0)
-        cal.add(java.util.Calendar.MONTH, -11)
-        val out = ArrayList<Pair<String, DayStat>>(12)
-        repeat(12) {
+        val count = n.coerceIn(1, 60)
+        cal.add(java.util.Calendar.MONTH, -(count - 1))
+        val out = ArrayList<Pair<String, DayStat>>(count)
+        repeat(count) {
             val key = fmt.format(cal.time)
             var l = 0
             var r = 0
@@ -289,7 +310,15 @@ object AppState {
 
     // -------------------------------------------------------------- settings
     fun updateSettings(block: (Settings) -> Settings) {
+        val before = settings
         settings = block(settings)
+        // 换了字库（档次 / 收藏）就丢掉当前会话：
+        // 否则池子里还是旧字库的字，恢复时会被截断，计数也对不上
+        if (before.level != settings.level || before.starredBook != settings.starredBook) {
+            store.clearSession()
+            session = null
+            dataVersion++
+        }
         store.saveSettings(settings)
         Feedback.configure(settings.soundLevel, settings.vibrateLevel)
     }
@@ -591,10 +620,11 @@ object AppState {
         val now = System.currentTimeMillis()
         chars.forEach { ch ->
             val old = baseProgress(ch)
+            // 标熟 = 已经会了：直接当毕业，不再进复习队列
             progress[ch] = old.copy(
                 f1 = STREAK_GOAL, f2 = STREAK_GOAL,
-                learned = true, known = true, mastered = false, interval = 1,
-                dueAt = dayStart(1), lastSeen = now
+                learned = true, known = true, mastered = true,
+                interval = MASTER_DAYS, dueAt = Long.MAX_VALUE, lastSeen = now
             )
         }
         persist()

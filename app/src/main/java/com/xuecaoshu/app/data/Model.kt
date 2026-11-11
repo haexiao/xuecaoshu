@@ -64,6 +64,8 @@ enum class LearnOrder { FREQ, BOOK, RANDOM }
 data class Settings(
     val darkTheme: Boolean = false,
     val level: Int = 1,
+    /** 字库来源：false = GB2312 档次，true = 我的收藏 */
+    val starredBook: Boolean = false,
     val cursiveFace: CursiveFace = CursiveFace.XINGYUN,
     val regularFont: RegularFont = RegularFont.SYSTEM,
     val dailyNew: Int = 15,

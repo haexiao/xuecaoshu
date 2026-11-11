@@ -1,6 +1,17 @@
 package com.xuecaoshu.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -13,6 +24,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -40,12 +52,24 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -68,10 +92,22 @@ fun BookScreen(onBack: () -> Unit) {
     BackHandler {
         if (listMode != null) listMode = null else onBack()
     }
-    if (listMode != null) {
-        CharListScreen(onlyStarred = listMode == "star") { listMode = null }
-    } else {
-        BookHome(onBack = onBack, onOpenList = { listMode = it })
+    AnimatedContent(
+        targetState = listMode,
+        transitionSpec = {
+            // 进字表 = 前进（从右滑入）；回字库首页 = 后退（向右滑出）
+            val back = targetState == null
+            val dir = if (back) -1 else 1
+            (fadeIn(tween(200)) + slideInHorizontally(tween(240)) { dir * it / 6 })
+                .togetherWith(fadeOut(tween(140)) + slideOutHorizontally(tween(200)) { -dir * it / 8 })
+        },
+        label = "book"
+    ) { mode ->
+        if (mode != null) {
+            CharListScreen(onlyStarred = mode == "star") { listMode = null }
+        } else {
+            BookHome(onBack = onBack, onOpenList = { listMode = it })
+        }
     }
 }
 
@@ -95,7 +131,7 @@ private fun BookHome(onBack: () -> Unit, onOpenList: (String) -> Unit) {
     val series = if (view == ChartView.WEEK) {
         AppState.daySeries(AppState.historyDays())
     } else {
-        AppState.monthSeries12()
+        AppState.monthSeries12(AppState.historyMonths())
     }
 
     Column(
@@ -258,11 +294,12 @@ private fun TrendChart(
     val p = Ink.palette
 
     // 柱子等宽：一周视图用固定宽度（可横滑），月视图平分 12 格
-    val barW = if (view == ChartView.WEEK) 34.dp else 0.dp
+    // 两种视图都用固定柱宽，超出屏幕就横滑
+    val barW = 34.dp
     val scroll = rememberScrollState()
     // 一周视图默认滑到最右（最近的一天）
     LaunchedEffect(series.size, view, scroll.maxValue) {
-        if (view == ChartView.WEEK) scroll.scrollTo(scroll.maxValue)
+        scroll.scrollTo(scroll.maxValue)
     }
 
     val learnedVals = series.map { it.second.learned }
@@ -280,11 +317,7 @@ private fun TrendChart(
         Row(
             Modifier
                 .fillMaxSize()
-                .then(
-                    if (view == ChartView.WEEK)
-                        Modifier.horizontalScroll(scroll)
-                    else Modifier
-                ),
+                .horizontalScroll(scroll),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.Bottom
         ) {
@@ -299,11 +332,7 @@ private fun TrendChart(
 
                 Column(
                     Modifier
-                        .then(
-                            if (view == ChartView.WEEK)
-                                Modifier.width(barW)
-                            else Modifier.weight(1f)
-                        )
+                        .width(barW)
                         .fillMaxHeight()
                         .pointerInput(i) {
                             detectTapGestures { onSelect(if (selected == i) -1 else i) }
@@ -411,7 +440,9 @@ private data class CharCell(
 @Composable
 private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
     val p = Ink.palette
-    var filter by remember { mutableStateOf(0) }
+    val pager = rememberPagerState(pageCount = { 5 })
+    val filter = pager.currentPage
+    val scope = rememberCoroutineScope()
     var order by remember { mutableStateOf(AppState.settings.order) }
     var edit by remember { mutableStateOf(false) }
     var sortOpen by remember { mutableStateOf(false) }
@@ -423,17 +454,18 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
     val level = AppState.settings.level
 
     // 只在筛选/排序/等级/进度变化时重算，滚动时不重新过滤排序
-    val shown: List<CharCell> = remember(filter, order, onlyStarred, level, version) {
+    // 某一档的全部字（按档 + 排序缓存；页面用 Pager 时每页各算一份）
+    fun buildShown(f: Int): List<CharCell> {
         val base = if (onlyStarred) AppState.starredChars()
         else AppState.charsOfLevel(level)
         val filtered = ArrayList<CharCell>(base.size)
         base.forEach { e ->
             val g = AppState.progressOf(e.char)
-            val keep = when (filter) {
+            val keep = when (f) {
                 1 -> !g.learned
-                2 -> g.learned && !g.mastered
-                3 -> g.mastered
-                4 -> g.known
+                2 -> g.learned && !g.mastered      // 复习中（标熟的已算毕业）
+                3 -> g.mastered && !g.known        // 正常毕业
+                4 -> g.known                       // 标熟
                 else -> true
             }
             if (keep) {
@@ -450,14 +482,16 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                 )
             }
         }
-        when (order) {
+        return when (order) {
             LearnOrder.FREQ -> filtered.sortedBy { it.rank }
             LearnOrder.BOOK -> filtered.sortedBy { it.index }
-            else -> filtered.shuffled(Random(filter))
+            else -> filtered.shuffled(Random(f))
         }
     }
 
-    val rows = remember(shown) { shown.chunked(8) }
+    // 当前页的字（编辑栏的「全选」用）
+    val shownNow = remember(filter, order, onlyStarred, level, version,
+        AppState.settings.starredBook) { buildShown(filter) }
 
     val tabs = listOf("全部", "未学习", "复习中", "复习完成", "已标熟")
     val orderName = when (order) {
@@ -499,12 +533,12 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
-                    if (selected.size == shown.size) "取消全选" else "全选",
+                    if (selected.size == shownNow.size) "取消全选" else "全选",
                     color = p.accent, fontSize = 13.sp,
                     modifier = Modifier.clip(RoundedCornerShape(8.dp))
                         .clickable {
-                            if (selected.size == shown.size) selected.clear()
-                            else shown.forEach { selected[it.char] = true }
+                            if (selected.size == shownNow.size) selected.clear()
+                            else shownNow.forEach { selected[it.char] = true }
                         }
                         .padding(horizontal = 6.dp, vertical = 4.dp)
                 )
@@ -554,7 +588,7 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                 Spacer(Modifier.weight(1f))
                 Box {
                     Text(
-                        "$orderName · ${shown.size} 字 ⌄",
+                        "$orderName · ${shownNow.size} 字 ⌄",
                         color = p.muted, fontSize = 11.sp,
                         modifier = Modifier.clip(RoundedCornerShape(10.dp))
                             .clickable { sortOpen = true }
@@ -602,7 +636,7 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                                 .background(if (on) p.ink else p.card)
                                 .clickable {
                                     Feedback.tap()
-                                    filter = i
+                                    scope.launch { pager.animateScrollToPage(i) }
                                 }
                                 .padding(horizontal = 14.dp, vertical = 6.dp)
                         ) {
@@ -617,86 +651,152 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
             Spacer(Modifier.height(6.dp))
         }
 
-        if (shown.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(
-                    if (onlyStarred) "还没有收藏的字" else "这一档还没有字",
-                    color = p.muted, fontSize = 13.sp
-                )
-            }
-        } else {
-            // 一行 8 个字：LazyColumn 只有 ~470 项，比 3755 项的网格轻得多
-            Box(Modifier.fillMaxSize()) {
-            LazyColumn(
-                state = listState,
-                contentPadding = PaddingValues(
-                    start = 18.dp, end = 26.dp, top = 8.dp, bottom = 8.dp
-                ),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(rows, key = { r -> r.first().index }) { rowCells ->
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        rowCells.forEach { entry ->
-                            val picked = selected.containsKey(entry.char)
-                            val cursive = flipped[entry.char] ?: entry.learned
-                            Box(
-                                Modifier.weight(1f).height(42.dp)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(
-                                        when {
-                                            picked -> p.ink.copy(alpha = 0.18f)
-                                            entry.mastered -> p.goodSoft
-                                            entry.learned -> p.card
-                                            else -> Color.Transparent
-                                        }
-                                    )
-                                    .then(
-                                        if (picked) Modifier.border(
-                                            1.5.dp, p.accent, RoundedCornerShape(6.dp)
-                                        ) else Modifier
-                                    )
-                                    .combinedClickable(
-                                        onClick = {
-                                            if (edit) {
-                                                if (picked) selected.remove(entry.char)
-                                                else selected[entry.char] = true
-                                            } else {
-                                                Feedback.tap()
-                                                flipped[entry.char] = !cursive
+        // 五个档位用 Pager 承载：左右滑动跟手，点标签也是平滑滚过去
+        HorizontalPager(
+            state = pager,
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            val shown = remember(
+                page, order, onlyStarred, level, version, AppState.settings.starredBook
+            ) { buildShown(page) }
+            val rows = remember(shown) { shown.chunked(8) }
+            val pageListState = rememberLazyListState()
+
+            if (shown.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (onlyStarred) "还没有收藏的字" else "这一档还没有字",
+                        color = p.muted, fontSize = 13.sp
+                    )
+                }
+            } else {
+                Box(Modifier.fillMaxSize()) {
+                    LazyColumn(
+                            state = pageListState,
+                            contentPadding = PaddingValues(
+                                start = 18.dp, end = 26.dp, top = 8.dp, bottom = 8.dp
+                            ),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(rows, key = { r -> r.first().index }) { rowCells ->
+                                // 整行只做一次测量和一次绘制：不再为每个字建 Text 节点
+                                val measurer = rememberTextMeasurer()
+                                val face = cursiveFamily(AppState.settings.cursiveFace.ordinal)
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .height(42.dp)
+                                        .drawWithCache {
+                                            val gap = 4.dp.toPx()
+                                            val cellW = (size.width - gap * 7) / 8
+                                            val radius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
+                                            val stroke = Stroke(width = 1.5.dp.toPx())
+
+                                            // 每格的样式、颜色、背景，全部在缓存块里算好
+                                            data class Cell(
+                                                val layout: TextLayoutResult,
+                                                val bg: Color,
+                                                val picked: Boolean,
+                                                val fg: Color
+                                            )
+
+                                            val cells = rowCells.map { e ->
+                                                val picked = selected.containsKey(e.char)
+                                                val cursive = flipped[e.char] ?: e.learned
+                                                val style = TextStyle(
+                                                    fontSize = 22.sp,
+                                                    fontFamily = if (cursive) face else FontFamily.Default,
+                                                    color = Color.Black
+                                                )
+                                                val fg = when {
+                                                    picked -> p.ink
+                                                    e.starred -> p.accent
+                                                    e.known -> p.good
+                                                    e.mastered -> p.good
+                                                    e.learned -> p.ink
+                                                    else -> p.muted.copy(alpha = 0.7f)
+                                                }
+                                                val bg = when {
+                                                    picked -> p.ink.copy(alpha = 0.18f)
+                                                    e.mastered -> p.goodSoft
+                                                    e.learned -> p.card
+                                                    else -> Color.Transparent
+                                                }
+                                                Cell(
+                                                    measurer.measure(e.char, style),
+                                                    bg, picked, fg
+                                                )
                                             }
-                                        },
-                                        onLongClick = {
-                                            Feedback.tap()
-                                            edit = true
-                                            selected[entry.char] = true
+
+                                            onDrawBehind {
+                                                cells.forEachIndexed { i, c ->
+                                                    val left = i * (cellW + gap)
+                                                    if (c.bg != Color.Transparent) {
+                                                        drawRoundRect(
+                                                            color = c.bg,
+                                                            topLeft = Offset(left, 0f),
+                                                            size = Size(cellW, size.height),
+                                                            cornerRadius = radius
+                                                        )
+                                                    }
+                                                    if (c.picked) {
+                                                        drawRoundRect(
+                                                            color = p.accent,
+                                                            topLeft = Offset(left, 0f),
+                                                            size = Size(cellW, size.height),
+                                                            cornerRadius = radius,
+                                                            style = stroke
+                                                        )
+                                                    }
+                                                    val lay = c.layout
+                                                    drawText(
+                                                        textLayoutResult = lay,
+                                                        color = c.fg,
+                                                        topLeft = Offset(
+                                                            left + (cellW - lay.size.width) / 2f,
+                                                            (size.height - lay.size.height) / 2f
+                                                        )
+                                                    )
+                                                }
+                                            }
                                         }
-                                    ),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Glyph(
-                                    text = entry.char,
-                                    cursive = cursive,
-                                    size = 22.sp,
-                                    color = when {
-                                        picked -> p.ink
-                                        entry.starred -> p.accent
-                                        entry.mastered -> p.good
-                                        entry.learned -> p.ink
-                                        else -> p.muted.copy(alpha = 0.7f)
-                                    }
+                                        .pointerInput(edit, rowCells) {
+                                            val gap = 4.dp.toPx()
+                                            fun indexAt(x: Float): Int {
+                                                val cellW = (size.width - gap * 7) / 8
+                                                if (cellW <= 0f) return -1
+                                                return (x / (cellW + gap)).toInt().coerceIn(0, 7)
+                                            }
+                                            fun fire(idx: Int, long: Boolean) {
+                                                val entry = rowCells.getOrNull(idx) ?: return
+                                                if (long) {
+                                                    Feedback.tap()
+                                                    edit = true
+                                                    selected[entry.char] = true
+                                                } else if (edit) {
+                                                    if (selected.containsKey(entry.char)) {
+                                                        selected.remove(entry.char)
+                                                    } else {
+                                                        selected[entry.char] = true
+                                                    }
+                                                } else {
+                                                    Feedback.tap()
+                                                    val cur = flipped[entry.char] ?: entry.learned
+                                                    flipped[entry.char] = !cur
+                                                }
+                                            }
+                                            detectTapGestures(
+                                                onTap = { fire(indexAt(it.x), false) },
+                                                onLongPress = { fire(indexAt(it.x), true) }
+                                            )
+                                        }
                                 )
                             }
                         }
-                        if (rowCells.size < 8) {
-                            repeat(8 - rowCells.size) { Spacer(Modifier.weight(1f)) }
-                        }
-                    }
+                    FastScroller(
+                        pageListState, rows.size, Modifier.align(Alignment.CenterEnd)
+                    )
                 }
-            }
-            FastScroller(listState, rows.size, Modifier.align(Alignment.CenterEnd))
             }
         }
     }

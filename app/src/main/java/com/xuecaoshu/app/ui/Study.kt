@@ -52,7 +52,12 @@ import com.xuecaoshu.app.StudySession
 
 @Composable
 fun StudyScreen(onExit: () -> Unit) {
-    val s = AppState.session ?: return
+    // 退出时 session 会先被清空，但转场动画还要把这一屏滑出去，
+    // 所以留一份最后的内容用来渲染，否则动画期间是空白。
+    val live = AppState.session
+    var last by remember { mutableStateOf(live) }
+    if (live != null) last = live
+    val s = live ?: last ?: return
 
     BackHandler {
         AppState.endSession()
