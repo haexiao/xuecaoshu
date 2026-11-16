@@ -226,6 +226,21 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 }
                 Divider()
+                ArrowRow("导出手写练习", "打包 zip 传到电脑") {
+                    runCatching {
+                        val zip = com.xuecaoshu.app.data.HwStore.exportZip(ctx)
+                        val uri = FileProvider.getUriForFile(
+                            ctx, "${ctx.packageName}.fileprovider", zip
+                        )
+                        val i = Intent(Intent.ACTION_SEND).apply {
+                            type = "application/zip"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        ctx.startActivity(Intent.createChooser(i, "导出手写练习"))
+                    }
+                }
+                Divider()
                 ArrowRow("进度导入", "从存档文件恢复") {
                     importer.launch(arrayOf("application/json", "text/plain", "*/*"))
                 }

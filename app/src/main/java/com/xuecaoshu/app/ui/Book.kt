@@ -87,8 +87,12 @@ enum class Metric { COUNT, TIME }
 enum class ChartView { WEEK, MONTH }
 
 @Composable
-fun BookScreen(onBack: () -> Unit) {
-    var listMode by remember { mutableStateOf<String?>(null) }
+fun BookScreen(
+    onBack: () -> Unit,
+    initialList: String? = null,
+    onOpenHandwriting: (String?) -> Unit = {}
+) {
+    var listMode by remember { mutableStateOf(initialList) }
     BackHandler {
         if (listMode != null) listMode = null else onBack()
     }
@@ -104,7 +108,10 @@ fun BookScreen(onBack: () -> Unit) {
         label = "book"
     ) { mode ->
         if (mode != null) {
-            CharListScreen(onlyStarred = mode == "star") { listMode = null }
+            CharListScreen(
+                onlyStarred = mode == "star",
+                onOpenHandwriting = { onOpenHandwriting(mode) }
+            ) { listMode = null }
         } else {
             BookHome(onBack = onBack, onOpenList = { listMode = it })
         }
@@ -172,8 +179,10 @@ private fun BookHome(onBack: () -> Unit, onOpenList: (String) -> Unit) {
         SectionLabel("学习统计")
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            MiniStat("今日字数", "${today.learned}", "字", Modifier.weight(1f))
-            MiniStat("累计字数", "${all.learned}", "字", Modifier.weight(1f))
+            MiniStat("今日字数", "${today.learned}", "字", Modifier.weight(1f),
+                second = "${today.reviewed}")
+            MiniStat("累计字数", "${all.learned}", "字", Modifier.weight(1f),
+                second = "${all.reviewed}")
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -249,7 +258,14 @@ private fun StatCard(label: String, value: String, unit: String, modifier: Modif
 }
 
 @Composable
-private fun MiniStat(label: String, value: String, unit: String, modifier: Modifier) {
+private fun MiniStat(
+    label: String,
+    value: String,
+    unit: String,
+    modifier: Modifier,
+    /** 第二个数（复习量）；给 null 就只显示一个数 */
+    second: String? = null
+) {
     val p = Ink.palette
     Column(
         modifier.clip(RoundedCornerShape(12.dp)).background(p.card)
@@ -258,7 +274,11 @@ private fun MiniStat(label: String, value: String, unit: String, modifier: Modif
         Text(label, color = p.muted, fontSize = 9.sp)
         Spacer(Modifier.height(3.dp))
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(value, color = p.ink, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            Text(value, color = p.accent, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            if (second != null) {
+                Text(" / ", color = p.muted, fontSize = 13.sp)
+                Text(second, color = p.good, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            }
             Spacer(Modifier.size(2.dp))
             Text(unit, color = p.muted, fontSize = 9.sp)
         }
@@ -438,7 +458,18 @@ private data class CharCell(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
+fun CharListScreen(
+    onlyStarred: Boolean,
+    onOpenHandwriting: () -> Unit = {},
+    /** 选择模式：点一个字就回调，不切草楷、不进多选 */
+    pickMode: Boolean = false,
+    /** 选择模式下每个字右下角的小角标（手写练习用它显示已采集张数） */
+    badges: Map<String, Int> = emptyMap(),
+    onPick: ((String) -> Unit)? = null,
+    onBack: () -> Unit
+) {
+    // 选择模式下按「已采集张数」筛：0=全部，-1=未书写，1..5，6=6+
+    var cntPick by remember { mutableStateOf(0) }
     val p = Ink.palette
     val pager = rememberPagerState(pageCount = { 5 })
     val filter = pager.currentPage
@@ -469,6 +500,15 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                 else -> true
             }
             if (keep) {
+                if (pickMode && cntPick != 0) {
+                    val n = badges[e.char] ?: 0
+                    val pass = when (cntPick) {
+                        -1 -> n == 0
+                        10 -> n >= 10
+                        else -> n == cntPick
+                    }
+                    if (!pass) return@forEach
+                }
                 filtered.add(
                     CharCell(
                         char = e.char,
@@ -582,7 +622,7 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                 )
                 Spacer(Modifier.size(4.dp))
                 Text(
-                    if (onlyStarred) "我的收藏" else "全部字库",
+                    if (pickMode) "选一个字" else if (onlyStarred) "我的收藏" else "全部字库",
                     color = p.ink, fontSize = 18.sp, fontWeight = FontWeight.Medium
                 )
                 Spacer(Modifier.weight(1f))
@@ -622,7 +662,65 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                 }
             }
 
-            if (!onlyStarred) {
+            if (!onlyStarred && pickMode) {
+                // 两行：第一行档位（与全部字库一致），第二行按已采集张数
+                // 注意不能套进外层 horizontalScroll 的 Row，否则内层滚动会收到无限约束
+                Column(Modifier.fillMaxWidth()) {
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = 18.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                tabs.forEachIndexed { i, label ->
+                                    val on = filter == i
+                                    Box(
+                                        Modifier.clip(RoundedCornerShape(14.dp))
+                                            .background(if (on) p.ink else p.card)
+                                            .clickable {
+                                                Feedback.tap()
+                                                scope.launch { pager.animateScrollToPage(i) }
+                                            }
+                                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                                    ) {
+                                        Text(
+                                            label,
+                                            color = if (on) onColor(p.ink) else p.ink2,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(7.dp))
+                            val countTabs = listOf(
+                                0 to "全部", -1 to "未书写",
+                                1 to "1", 2 to "2", 3 to "3", 4 to "4", 5 to "5",
+                                6 to "6", 7 to "7", 8 to "8", 9 to "9", 10 to "10+"
+                            )
+                            Row(
+                                Modifier.fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = 18.dp),
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                countTabs.forEach { (k, label) ->
+                                    val on = cntPick == k
+                                    Box(
+                                        Modifier.clip(RoundedCornerShape(12.dp))
+                                            .background(if (on) p.accent else p.card)
+                                            .clickable { Feedback.tap(); cntPick = k }
+                                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                                    ) {
+                                        Text(
+                                            label,
+                                            color = if (on) onColor(p.accent) else p.ink2,
+                                            fontSize = 11.sp
+                                        )
+                                    }
+                                }
+                            }
+                }
+            } else if (!onlyStarred) {
                 Row(
                     Modifier.fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
@@ -654,10 +752,11 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
         // 五个档位用 Pager 承载：左右滑动跟手，点标签也是平滑滚过去
         HorizontalPager(
             state = pager,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.weight(1f)
         ) { page ->
             val shown = remember(
-                page, order, onlyStarred, level, version, AppState.settings.starredBook
+                page, order, onlyStarred, level, version,
+                AppState.settings.starredBook, cntPick
             ) { buildShown(page) }
             val rows = remember(shown) { shown.chunked(8) }
             val pageListState = rememberLazyListState()
@@ -699,6 +798,19 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                                                 val picked: Boolean,
                                                 val fg: Color
                                             )
+
+                                            // 选择模式下的张数角标
+                                            val badgeLay = if (pickMode) rowCells.map { e ->
+                                                val n = badges[e.char] ?: 0
+                                                if (n > 0) measurer.measure(
+                                                    "$n",
+                                                    TextStyle(
+                                                        fontSize = 9.sp,
+                                                        color = p.accent,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                ) else null
+                                            } else null
 
                                             val cells = rowCells.map { e ->
                                                 val picked = selected.containsKey(e.char)
@@ -757,6 +869,15 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                                                             (size.height - lay.size.height) / 2f
                                                         )
                                                     )
+                                                    badgeLay?.getOrNull(i)?.let { b ->
+                                                        drawText(
+                                                            textLayoutResult = b,
+                                                            topLeft = Offset(
+                                                                left + cellW - b.size.width - 3.dp.toPx(),
+                                                                size.height - b.size.height - 1.dp.toPx()
+                                                            )
+                                                        )
+                                                    }
                                                 }
                                             }
                                         }
@@ -769,6 +890,13 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                                             }
                                             fun fire(idx: Int, long: Boolean) {
                                                 val entry = rowCells.getOrNull(idx) ?: return
+                                                if (pickMode) {
+                                                    if (!long) {
+                                                        Feedback.tap()
+                                                        onPick?.invoke(entry.char)
+                                                    }
+                                                    return
+                                                }
                                                 if (long) {
                                                     Feedback.tap()
                                                     edit = true
@@ -797,6 +925,18 @@ private fun CharListScreen(onlyStarred: Boolean, onBack: () -> Unit) {
                         pageListState, rows.size, Modifier.align(Alignment.CenterEnd)
                     )
                 }
+            }
+        }
+
+        // 列表底部：手写练习入口
+        if (!onlyStarred && !pickMode) {
+            Box(
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp)
+                    .height(42.dp).clip(RoundedCornerShape(21.dp)).background(p.ink)
+                    .clickable { Feedback.tap(); onOpenHandwriting() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("手写练习", color = onColor(p.ink), fontSize = 13.sp)
             }
         }
     }

@@ -32,9 +32,10 @@ import com.xuecaoshu.app.ui.HomeScreen
 import com.xuecaoshu.app.ui.Ink
 import com.xuecaoshu.app.ui.SettingsScreen
 import com.xuecaoshu.app.ui.StudyScreen
+import com.xuecaoshu.app.ui.HandwritingScreen
 import com.xuecaoshu.app.ui.XuecaoshuTheme
 
-private enum class Screen { HOME, BOOK, SETTINGS, STUDY }
+private enum class Screen { HOME, BOOK, SETTINGS, STUDY, HANDWRITE }
 
 class MainActivity : ComponentActivity() {
     override fun onPause() {
@@ -57,6 +58,8 @@ class MainActivity : ComponentActivity() {
             XuecaoshuTheme(dark = dark, regularFont = regular) {
                 val p = Ink.palette
                 var screen by remember { mutableStateOf(Screen.HOME) }
+                // 从哪张字表进的手写练习：退出时回到同一张
+                var bookList by remember { mutableStateOf<String?>(null) }
 
                 val view = LocalView.current
                 SideEffect {
@@ -78,7 +81,7 @@ class MainActivity : ComponentActivity() {
                             targetState = screen,
                             transitionSpec = {
                                 // 回主页面 = 后退（从右侧滑出），其余 = 前进（从右侧滑入）
-                                val back = targetState == Screen.HOME
+                                val back = targetState == Screen.HOME || targetState == Screen.BOOK
                                 val dir = if (back) -1 else 1
                                 (
                                     fadeIn(tween(200)) +
@@ -100,9 +103,21 @@ class MainActivity : ComponentActivity() {
                                 onOpenSettings = { screen = Screen.SETTINGS }
                             )
 
-                            Screen.BOOK -> BookScreen(onBack = { screen = Screen.HOME })
+                            Screen.BOOK -> BookScreen(
+                                onBack = { screen = Screen.HOME },
+                                initialList = bookList,
+                                onOpenHandwriting = { mode ->
+                                    bookList = mode      // 记住从哪张字表进来的
+                                    screen = Screen.HANDWRITE
+                                }
+                            )
                             Screen.SETTINGS -> SettingsScreen(onBack = { screen = Screen.HOME })
                             Screen.STUDY -> StudyScreen(onExit = { screen = Screen.HOME })
+
+                            Screen.HANDWRITE -> HandwritingScreen(
+                                // 退出回到原来那张字表
+                                onExit = { screen = Screen.BOOK }
+                            )
                         }
                         }
                     }
